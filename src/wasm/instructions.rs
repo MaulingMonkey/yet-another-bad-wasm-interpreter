@@ -636,16 +636,16 @@ impl Decoder<'_> {
                     // https://webassembly.github.io/spec/core/binary/instructions.html#memory-instructions
                     8 => match (self.u32(), self.byte()) {
                         (x, 0x00) => Instr::MemoryInit(x),
-                        (_x, other) => { self.error(format!("invalid instruction bytecode 0xFC 0x08 [x:u32] 0x{:02x}", other)); Instr::Nop }
+                        (_x, other) => { self.error(format!("invalid instruction bytecode 0xFC 0x08 [x:u32] 0x{:02X}", other)); Instr::Nop }
                     },
                     9 => Instr::DataDrop(self.u32()),
                     10 => match (self.byte(), self.byte()) {
                         (0x00, 0x00) => Instr::MemoryCopy,
-                        (a, _) => { self.error(format!("invalid instruction bytecode 0xFC 0x0A 0x{:02x} ...", a)); Instr::Nop },
+                        (a, _) => { self.error(format!("invalid instruction bytecode 0xFC 0x0A 0x{:02X} ...", a)); Instr::Nop },
                     },
                     11 => match self.byte() {
                         0x00 => Instr::MemoryFill,
-                        a => { self.error(format!("invalid instruction bytecode 0xFc 0x0B 0x{:02x} ...", a)); Instr::Nop },
+                        a => { self.error(format!("invalid instruction bytecode 0xFC 0x0B 0x{:02X} ...", a)); Instr::Nop },
                     },
 
                     // https://webassembly.github.io/spec/core/binary/instructions.html#table-instructions
@@ -667,7 +667,7 @@ impl Decoder<'_> {
                     17 => Instr::TableFill(self.u32()),
 
                     other => {
-                        self.error(format!("invalid instruction bytecode 0xFC 0x{:02x}", other));
+                        self.error(format!("invalid instruction bytecode 0xFC 0x{:02X}", other));
                         Instr::Nop
                     },
                 }
@@ -698,8 +698,8 @@ impl Decoder<'_> {
             0x3C => Instr::I64_Store8(self.memarg()),
             0x3D => Instr::I64_Store16(self.memarg()),
             0x3E => Instr::I64_Store32(self.memarg()),
-            0x3F => match self.byte() { 0x00 => Instr::MemorySize, other => { self.error(format!("invalid instruction bytecode 0x3F 0x{:02x}", other)); Instr::Nop } },
-            0x40 => match self.byte() { 0x00 => Instr::MemoryGrow, other => { self.error(format!("invalid instruction bytecode 0x40 0x{:02x}", other)); Instr::Nop } },
+            0x3F => match self.byte() { 0x00 => Instr::MemorySize, other => { self.error(format!("invalid instruction bytecode 0x3F 0x{:02X}", other)); Instr::Nop } },
+            0x40 => match self.byte() { 0x00 => Instr::MemoryGrow, other => { self.error(format!("invalid instruction bytecode 0x40 0x{:02X}", other)); Instr::Nop } },
 
             // https://webassembly.github.io/spec/core/binary/instructions.html#numeric-instructions
 
@@ -847,7 +847,7 @@ impl Decoder<'_> {
             0xC4 => Instr::I64_Extend32_s,
 
             other => {
-                self.error(format!("invalid instruction bytecode 0x{:02x}", other));
+                self.error(format!("invalid instruction bytecode 0x{:02X}", other));
                 Instr::Nop
             },
         }
