@@ -70,7 +70,7 @@ pub enum Instr {
 
     // https://webassembly.github.io/spec/core/binary/instructions.html#parametric-instructions
     Drop,
-    Select          (Vec<ValType>),
+    Select          (Option<ValType>),
 
     // https://webassembly.github.io/spec/core/binary/instructions.html#variable-instructions
     LocalGet        (LocalIdx),
@@ -315,11 +315,8 @@ impl Display for Instr {
 
             // https://webassembly.github.io/spec/core/binary/instructions.html#parametric-instructions
             Drop                => write!(fmt, "drop"),
-            Select(types)       => {
-                write!(fmt, "select")?;
-                for ty in types.iter() { write!(fmt, " {}", ty)?; }
-                Ok(())
-            },
+            Select(None)        => write!(fmt, "select"),
+            Select(Some(ty))    => write!(fmt, "select {}", ty),
 
             // https://webassembly.github.io/spec/core/binary/instructions.html#variable-instructions
             LocalGet(x)         => write!(fmt, "local.get {}", x),
@@ -606,8 +603,12 @@ impl Decoder<'_> {
             // https://webassembly.github.io/spec/core/binary/instructions.html#parametric-instructions
 
             0x1A => Instr::Drop,
-            0x1B => Instr::Select(Vec::new()),
-            0x1C => Instr::Select(self.vec(|d| d.valtype())),
+            0x1B => Instr::Select(None),
+            0x1C => {
+                let types = self.vec(|d| d.valtype());
+                if types.len() > 1 { self.error(format!("`select` expects 0 or 1 `valtype`s, got {}", types.len())); }
+                Instr::Select(types.get(0).copied())
+            },
 
             // https://webassembly.github.io/spec/core/binary/instructions.html#variable-instructions
 
