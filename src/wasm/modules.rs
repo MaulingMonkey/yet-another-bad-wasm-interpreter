@@ -2,7 +2,9 @@
 
 use crate::*;
 
+use std::cell::RefCell;
 use std::fmt::{self, Debug, Formatter};
+use std::sync::Arc;
 
 
 
@@ -29,13 +31,57 @@ pub type LabelIdx   = u32;
 
 
 /// [Custom sections](https://webassembly.github.io/spec/core/binary/modules.html#custom-section)
+#[derive(Clone)]
+pub enum CustomSec {
+    Name(CustomSecName),
+    Misc(CustomSecMisc)
+}
+
+/// [Name section](https://webassembly.github.io/spec/core/appendix/custom.html#name-section)
 #[derive(Clone, Default)]
-pub struct CustomSec {
+pub struct CustomSecName {
+    pub module:     Option<String>,
+    pub functions:  Vec<(usize, String)>,
+    pub locals:     Vec<(usize, Vec<(usize, String)>)>,
+}
+
+#[derive(Clone, Default)]
+pub struct CustomSecMisc {
     pub name: String,
     pub data: Vec<u8>,
 }
 
 impl Debug for CustomSec {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            CustomSec::Misc(c) => Debug::fmt(c, fmt),
+            CustomSec::Name(c) => Debug::fmt(c, fmt),
+        }
+    }
+}
+
+impl Debug for CustomSecName {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(fmt, "CustomSec {{")?;
+        writeln!(fmt, "    name:      {:?},", "name")?;
+        writeln!(fmt, "    module:    {:?},", &self.module)?;
+
+        if false {
+            writeln!(fmt, "    functions: [.. {} item(s)],", &self.functions.len())?;
+        } else {
+            writeln!(fmt, "    functions: [")?;
+            for (idx, name) in self.functions.iter() {
+                writeln!(fmt, "        ({}, {:?}),", idx, name)?;
+            }
+            writeln!(fmt, "    ]")?;
+        }
+
+        writeln!(fmt, "    locals:    [.. {} item(s)],", &self.locals.len())?;
+        write!(fmt, "}}")
+    }
+}
+
+impl Debug for CustomSecMisc {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
         write!(fmt, "CustomSec {{ name: {:?}, data: {} byte(s) }}", self.name, self.data.len())
     }
@@ -218,6 +264,28 @@ impl Debug for Local {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct Funcs(pub usize, pub Vec<Func>);
+
+impl Debug for Funcs {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(fmt, "[")?;
+        for (i, f) in self.1.iter().enumerate() {
+            writeln!(fmt, "    Func {{")?;
+            if let Some(name) = Module::_debug_get_function_name(i + self.0) {
+                writeln!(fmt, "        name:   {:?}", name)?;
+            } else {
+                writeln!(fmt, "        index:  {:?}", i)?;
+            }
+            writeln!(fmt, "        ty:     {:?}", f.ty)?;
+            writeln!(fmt, "        locals: {:?}", f.locals)?;
+            writeln!(fmt, "        body:   {}", format!("{:?}", f.body).replace("\n", "\n        "))?;
+            writeln!(fmt, "    }},")?;
+        }
+        write!(fmt, "]")
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Func { pub ty: TypeIdx, pub locals: Vec<Local>, pub body: Expr }
 
@@ -248,7 +316,7 @@ pub struct DataCountSec(pub u32);
 
 
 /// [Modules](https://webassembly.github.io/spec/core/binary/modules.html#binary-module)
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct Module {
     pub types:      TypeSec,
     pub tables:     TableSec,
@@ -259,9 +327,53 @@ pub struct Module {
     pub start:      Option<StartSec>,
     pub imports:    ImportSec,
     pub exports:    ExportSec,
-    pub customs:    Vec<CustomSec>,
+    pub customs:    Vec<CustomSecMisc>,
+    pub names:      Option<Arc<CustomSecName>>,
 
-    pub funcs:      Vec<Func>,
+    pub funcs:      Funcs,
+}
+
+thread_local! {
+    static MODULE_DEBUG_NAMES : RefCell<Option<Arc<CustomSecName>>> = RefCell::new(None);
+}
+
+impl Debug for Module {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
+        let prev = MODULE_DEBUG_NAMES.with(|mdn| mdn.borrow().clone());
+        MODULE_DEBUG_NAMES.with(|mdn| *mdn.borrow_mut() = self.names.clone());
+        let r = fmt.debug_struct("Module")
+            .field("types",     &self.types     )
+            .field("tables",    &self.tables    )
+            .field("mems",      &self.mems      )
+            .field("globals",   &self.globals   )
+            .field("elems",     &self.elems     )
+            .field("datas",     &self.datas     )
+            .field("start",     &self.start     )
+            .field("imports",   &self.imports   )
+            .field("exports",   &self.exports   )
+            .field("customs",   &self.customs   )
+            .field("names",     &self.names     )
+            .field("funcs",     &self.funcs     )
+            .finish();
+        MODULE_DEBUG_NAMES.with(|mdn| *mdn.borrow_mut() = prev);
+        r
+    }
+}
+
+impl Module {
+    pub(super) fn _debug_get_function_name(func_idx: usize) -> Option<String> {
+        MODULE_DEBUG_NAMES.with(|mdn| mdn.borrow().as_ref().and_then(|mdn| {
+            if let Some((idx, func)) = mdn.functions.get(func_idx) {
+                if *idx == func_idx { return Some(func.into()); }
+            }
+
+            if let Ok(idx) = mdn.functions.binary_search_by_key(&func_idx, |(idx, _func)| *idx) {
+                Some(mdn.functions[idx].1.clone())
+            } else {
+                None
+            }
+        }))
+    }
 }
 
 
@@ -275,31 +387,31 @@ impl Decoder<'_> {
 
         let mut m = Module::default();
 
-        self.customsecs(|custom| m.customs.push(custom));
+        self.customsecs(&mut m);
         m.types = self.typesec().unwrap_or_default();
-        self.customsecs(|custom| m.customs.push(custom));
+        self.customsecs(&mut m);
         m.imports = self.importsec().unwrap_or_default();
-        self.customsecs(|custom| m.customs.push(custom));
+        self.customsecs(&mut m);
         let funcsec = self.funcsec().unwrap_or_default();
-        self.customsecs(|custom| m.customs.push(custom));
+        self.customsecs(&mut m);
         m.tables = self.tablesec().unwrap_or_default();
-        self.customsecs(|custom| m.customs.push(custom));
+        self.customsecs(&mut m);
         m.mems = self.memsec().unwrap_or_default();
-        self.customsecs(|custom| m.customs.push(custom));
+        self.customsecs(&mut m);
         m.globals = self.globalsec().unwrap_or_default();
-        self.customsecs(|custom| m.customs.push(custom));
+        self.customsecs(&mut m);
         m.exports = self.exportsec().unwrap_or_default();
-        self.customsecs(|custom| m.customs.push(custom));
+        self.customsecs(&mut m);
         m.start = self.startsec();
-        self.customsecs(|custom| m.customs.push(custom));
+        self.customsecs(&mut m);
         m.elems = self.elemsec().unwrap_or_default();
-        self.customsecs(|custom| m.customs.push(custom));
+        self.customsecs(&mut m);
         let datacountsec = self.datacountsec();
-        self.customsecs(|custom| m.customs.push(custom));
+        self.customsecs(&mut m);
         let codesec = self.codesec().unwrap_or_default();
-        self.customsecs(|custom| m.customs.push(custom));
+        self.customsecs(&mut m);
         m.datas = self.datasec().unwrap_or_default();
-        self.customsecs(|custom| m.customs.push(custom));
+        self.customsecs(&mut m);
 
         let _ = datacountsec;
 
@@ -307,11 +419,11 @@ impl Decoder<'_> {
             if funcsec.0.len() != codesec.0.len() {
                 self.error(format!("different number of entries in funcsec ({}) vs codesec ({})", funcsec.0.len(), codesec.0.len()));
             }
-            m.funcs = codesec.0.into_iter().zip(funcsec.0.into_iter()).map(|(code, func)| Func {
+            m.funcs = Funcs(m.imports.0.len(), codesec.0.into_iter().zip(funcsec.0.into_iter()).map(|(code, func)| Func {
                 ty:     func,
                 locals: code.locals,
                 body:   code.body,
-            }).collect();
+            }).collect());
         } else {
             self.error("missing codesec or funcsec");
         }
@@ -338,14 +450,55 @@ impl Decoder<'_> {
     }
 
     /// [Custom sections](https://webassembly.github.io/spec/core/binary/modules.html#custom-section)
-    pub fn customsecs(&mut self, mut on_sec: impl FnMut(CustomSec)) {
-        while let Some(s) = self.try_section(0, "custom", true, |d| CustomSec {
-            name:   d.name(),
-            data:   std::mem::replace(&mut d.remaining, &[]).to_owned(),
-        }) {
-            on_sec(s)
+    pub fn customsecs(&mut self, m: &mut Module) {
+        while self.try_section(0, "customsec", true, |d| {
+            let name = d.name();
+            match name.as_str() {
+                "name" if m.names.is_some() => d.error("multiple `customsec` sections with `name`=\"name\", only one is expected"),
+                "name" => m.names = Some(Arc::new(d.customsec_namesec())),
+                _other => m.customs.push(CustomSecMisc{
+                    name,
+                    data: std::mem::replace(&mut d.remaining, &[]).to_owned(),
+                }),
+            }
+        }).is_some() {}
+    }
+
+    /// [Name section](https://webassembly.github.io/spec/core/appendix/custom.html#name-section)
+    fn customsec_namesec(&mut self) -> CustomSecName {
+        // already consumed: id=0, name="name"
+        CustomSecName {
+            module:     self.try_section(0, "customsec.modulenamesubsec",   true, |d| d.name()),
+            functions:  self.try_section(1, "customsec.funcnamesubsec",     true, |d| d.namemap()).unwrap_or(Vec::new()),
+            locals:     self.try_section(2, "customsec.localnamesubsec",    true, |d| d.indirectnamemap()).unwrap_or(Vec::new()),
         }
     }
+
+    /// [Name maps](https://webassembly.github.io/spec/core/appendix/custom.html#name-maps)
+    fn namemap(&mut self) -> Vec<(usize, String)> {
+        let r = self.vec(|d| (d.idx(), d.name()));
+        let mut i = r.iter();
+        if let Some(mut prev) = i.next() {
+            while let Some(next) = i.next() {
+                if !(prev < next) { self.error("namemap indicies either not unique or not sorted"); return r; }
+                prev = next;
+            }
+        }
+        r
+    }
+
+    fn indirectnamemap(&mut self) -> Vec<(usize, Vec<(usize, String)>)> {
+        let r = self.vec(|d| (d.idx(), d.namemap()));
+        let mut i = r.iter();
+        if let Some(mut prev) = i.next() {
+            while let Some(next) = i.next() {
+                if !(prev < next) { self.error("indirectnamemap indicies either not unique or not sorted"); return r; }
+                prev = next;
+            }
+        }
+        r
+    }
+
 
     /// [Type section](https://webassembly.github.io/spec/core/binary/modules.html#type-section)
     pub fn typesec(&mut self) -> Option<TypeSec> {

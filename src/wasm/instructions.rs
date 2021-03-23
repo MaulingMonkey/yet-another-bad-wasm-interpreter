@@ -305,7 +305,13 @@ impl Display for Instr {
                 Ok(())
             },
             Return              => write!(fmt, "return"),
-            Call(x)             => write!(fmt, "call {}", x),
+            Call(x)             => {
+                if let Some(name) = Module::_debug_get_function_name(*x as usize) {
+                    write!(fmt, "call {}", name)
+                } else {
+                    write!(fmt, "call {}", x)
+                }
+            }
             CallIndirect(x, y)  => write!(fmt, "call_indirect {} {}", x, y),
 
             // https://webassembly.github.io/spec/core/binary/instructions.html#reference-instructions

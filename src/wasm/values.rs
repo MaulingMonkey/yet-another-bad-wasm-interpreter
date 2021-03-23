@@ -30,6 +30,7 @@ impl<'b> Decoder<'b> {
     // - [ ] Signed LEB128
     // - [ ] Byte count limits
 
+    pub fn idx(&mut self) -> usize { self.u32().into32() }
     pub fn u32(&mut self) -> u32 { self.uleb128() }
     pub fn u64(&mut self) -> u64 { self.uleb128() }
     pub fn s32(&mut self) -> i32 { self.sleb128() }
