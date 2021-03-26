@@ -30,13 +30,6 @@ pub type LabelIdx   = u32;
 
 
 
-/// [Custom sections](https://webassembly.github.io/spec/core/binary/modules.html#custom-section)
-#[derive(Clone)]
-pub enum CustomSec {
-    Name(CustomSecName),
-    Misc(CustomSecMisc)
-}
-
 /// [Name section](https://webassembly.github.io/spec/core/appendix/custom.html#name-section)
 #[derive(Clone, Default)]
 pub struct CustomSecName {
@@ -45,19 +38,32 @@ pub struct CustomSecName {
     pub locals:     Vec<(usize, Vec<(usize, String)>)>,
 }
 
+/// [Producers section](https://github.com/WebAssembly/tool-conventions/blob/master/ProducersSection.md)
+///
+/// ### Example
+/// ```text
+/// CustomSec {
+///     name:      "producers",
+///     fields: {
+///         "language": [
+///             ("Rust", ""),
+///         ]
+///         "processed-by": [
+///             ("clang", "10.0.0"),
+///             ("rustc", "1.50.0 (cb75ad5db 2021-02-10)"),
+///         ]
+///     }
+/// }
+/// ```
+#[derive(Clone, Default)]
+pub struct CustomSecProducers {
+    pub fields:     Vec<(String, Vec<(String, String)>)>,
+}
+
 #[derive(Clone, Default)]
 pub struct CustomSecMisc {
     pub name: String,
     pub data: Vec<u8>,
-}
-
-impl Debug for CustomSec {
-    fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            CustomSec::Misc(c) => Debug::fmt(c, fmt),
-            CustomSec::Name(c) => Debug::fmt(c, fmt),
-        }
-    }
 }
 
 impl Debug for CustomSecName {
@@ -77,6 +83,23 @@ impl Debug for CustomSecName {
         }
 
         writeln!(fmt, "    locals:    [.. {} item(s)],", &self.locals.len())?;
+        write!(fmt, "}}")
+    }
+}
+
+impl Debug for CustomSecProducers {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(fmt, "CustomSec {{")?;
+        writeln!(fmt, "    name:      {:?},", "producers")?;
+        writeln!(fmt, "    fields: {{")?;
+        for (field_name, field_values) in self.fields.iter() {
+            writeln!(fmt, "        {:?}: [", field_name)?;
+            for (name, version) in field_values.iter() {
+                writeln!(fmt, "            ({:?}, {:?}),", name, version)?;
+            }
+            writeln!(fmt, "        ]")?;
+        }
+        writeln!(fmt, "    }}")?;
         write!(fmt, "}}")
     }
 }
@@ -329,6 +352,7 @@ pub struct Module {
     pub exports:    ExportSec,
     pub customs:    Vec<CustomSecMisc>,
     pub names:      Option<Arc<CustomSecName>>,
+    pub producers:  CustomSecProducers,
 
     pub funcs:      Funcs,
 }
@@ -353,6 +377,7 @@ impl Debug for Module {
             .field("exports",   &self.exports   )
             .field("customs",   &self.customs   )
             .field("names",     &self.names     )
+            .field("producers", &self.producers )
             .field("funcs",     &self.funcs     )
             .finish();
         MODULE_DEBUG_NAMES.with(|mdn| *mdn.borrow_mut() = prev);
@@ -456,6 +481,9 @@ impl Decoder<'_> {
             match name.as_str() {
                 "name" if m.names.is_some() => d.error("multiple `customsec` sections with `name`=\"name\", only one is expected"),
                 "name" => m.names = Some(Arc::new(d.customsec_namesec())),
+                "producers" if !m.producers.fields.is_empty() => d.error("multiple `customsec` sections with `name`=\"producers\", only one is expected"),
+                "producers" if m.names.is_none() => d.error("`customsec` section with `name`=\"producers\" is only expected after \"name\" section"),
+                "producers" => m.producers = d.customsec_producers(),
                 _other => m.customs.push(CustomSecMisc{
                     name,
                     data: std::mem::replace(&mut d.remaining, &[]).to_owned(),
@@ -471,6 +499,14 @@ impl Decoder<'_> {
             module:     self.try_section(0, "customsec.modulenamesubsec",   true, |d| d.name()),
             functions:  self.try_section(1, "customsec.funcnamesubsec",     true, |d| d.namemap()).unwrap_or(Vec::new()),
             locals:     self.try_section(2, "customsec.localnamesubsec",    true, |d| d.indirectnamemap()).unwrap_or(Vec::new()),
+        }
+    }
+
+    /// [Producers section](https://github.com/WebAssembly/tool-conventions/blob/master/ProducersSection.md)
+    fn customsec_producers(&mut self) -> CustomSecProducers {
+        // already consumed: id=0, name="producers"
+        CustomSecProducers {
+            fields: self.vec(|d| (d.name(), d.vec(|d| (d.name(), d.name()))))
         }
     }
 
